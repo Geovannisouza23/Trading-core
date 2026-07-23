@@ -1,0 +1,80 @@
+x-app-env: &app-env
+  DATABASE_HOST: postgres
+  DATABASE_PORT: "5432"
+  DATABASE_USER: trading
+  DATABASE_PASSWORD: trading
+  DATABASE_NAME: trading_core
+  DATABASE_SSL_MODE: disable
+  BROKER_MODE: PAPER
+  BROKER_PAPER_STARTING_BALANCE: "10000"
+  LLM_PROVIDER: noop
+  QUANT_MODE: fake
+  OBSERVABILITY_SERVICE_NAME: trading-core
+  OBSERVABILITY_ENVIRONMENT: docker-compose
+  OBSERVABILITY_LOG_LEVEL: info
+  OBSERVABILITY_LOG_FORMAT: json
+  # CHANGE THIS before exposing the API beyond local docker-compose.
+  SECURITY_JWT_SIGNING_SECRET: "docker-compose-dev-secret-change-me-please-32chars"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: trading
+      POSTGRES_PASSWORD: trading
+      POSTGRES_DB: trading_core
+    ports:
+      - "5432:5432"
+    volumes:
+      - trading_core_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading -d trading_core"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [trading_core]
+
+  migrate:
+    build: .
+    command: ["/usr/local/bin/migrate", "up"]
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [trading_core]
+
+  api:
+    build: .
+    command: ["/usr/local/bin/api"]
+    environment: *app-env
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks: [trading_core]
+
+  worker:
+    build: .
+    command: ["/usr/local/bin/worker"]
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [trading_core]
+
+networks:
+  trading_core:
+
+volumes:
+  trading_core_pgdata:

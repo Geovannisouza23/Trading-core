@@ -1,0 +1,21 @@
+# Example override that switches the stack from PAPER to Binance Futures
+# TESTNET. Usage:
+#
+#   BROKER_BINANCE_API_KEY=... BROKER_BINANCE_API_SECRET=... \
+#     docker compose -f docker-compose.yml -f deployments/compose/docker-compose.testnet.yml up
+#
+# Never layer a "real" override the same way without reading spec section 14
+# (docs/decisions and docs/architecture.md) first — REAL mode has additional
+# mandatory safeguards this file intentionally does not set.
+services:
+  api:
+    environment:
+      BROKER_MODE: TESTNET
+      BROKER_BINANCE_API_KEY: ${BROKER_BINANCE_API_KEY:?set your Binance testnet API key}
+      BROKER_BINANCE_API_SECRET: ${BROKER_BINANCE_API_SECRET:?set your Binance testnet API secret}
+
+  worker:
+    environment:
+      BROKER_MODE: TESTNET
+      BROKER_BINANCE_API_KEY: ${BROKER_BINANCE_API_KEY:?set your Binance testnet API key}
+      BROKER_BINANCE_API_SECRET: ${BROKER_BINANCE_API_SECRET:?set your Binance testnet API secret}
