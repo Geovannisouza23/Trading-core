@@ -1,0 +1,476 @@
+openapi: 3.0.3
+info:
+  title: Trading Core API
+  description: >
+    Operational core of an automated trading robot, running in PAPER mode by
+    default. See docs/architecture.md for the full system design.
+  version: "1.0.0"
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: Process is up
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+
+  /ready:
+    get:
+      summary: Readiness probe (checks the database connection)
+      security: []
+      responses:
+        "200":
+          description: Ready to serve traffic
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadyResponse" }
+        "503":
+          description: A dependency is unavailable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadyResponse" }
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      security: []
+      responses:
+        "200":
+          description: Prometheus text exposition format
+          content:
+            text/plain: {}
+
+  /v1/dashboard:
+    get:
+      summary: Full trading dashboard snapshot
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dashboard" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/account:
+    get:
+      summary: Current account state
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Account" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/positions:
+    get:
+      summary: Open positions
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Position" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/orders:
+    get:
+      summary: Recent orders
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Order" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/orders/{id}:
+    get:
+      summary: Get a single order by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/signals:
+    get:
+      summary: Recent trade signals
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Signal" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/risk-decisions:
+    get:
+      summary: Recent risk decisions
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RiskDecision" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/events:
+    get:
+      summary: Recent market events
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/MarketEvent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/incidents:
+    get:
+      summary: Recent system incidents
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Incident" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/system/pause:
+    post:
+      summary: Pause trading (blocks new entries, keeps monitoring/reconciliation running)
+      requestBody: { $ref: "#/components/requestBodies/Reason" }
+      responses:
+        "200": { $ref: "#/components/responses/Status" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/system/resume:
+    post:
+      summary: Resume trading in the deployment's configured mode (PAPER/TESTNET only — REAL can never be reached through this endpoint)
+      requestBody: { $ref: "#/components/requestBodies/Reason" }
+      responses:
+        "200": { $ref: "#/components/responses/Status" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/system/close-only:
+    post:
+      summary: Enter CLOSE_ONLY mode (only reducing/closing positions is allowed)
+      requestBody: { $ref: "#/components/requestBodies/Reason" }
+      responses:
+        "200": { $ref: "#/components/responses/Status" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/system/kill-switch:
+    post:
+      summary: Activate the kill switch (blocks all new entries; overrides every other mode)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KillSwitchRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Status" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/paper/reset:
+    post:
+      summary: Reset the PAPER account, PaperBroker ledger, and any open positions/orders to a fresh starting state (PAPER mode only)
+      responses:
+        "200": { $ref: "#/components/responses/Status" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/backtest/request:
+    post:
+      summary: Not implemented in this delivery — returns 501 with a structured explanation
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BacktestRequest" }
+      responses:
+        "501":
+          description: Not implemented
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        HS256 JWT with a "roles" claim (array of strings). Read-only /v1/*
+        GET endpoints accept any authenticated role; POST /v1/system/*,
+        /v1/paper/reset and /v1/backtest/request require "operator" or
+        "admin".
+
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, default: 50, minimum: 1 }
+
+  requestBodies:
+    Reason:
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ReasonRequest" }
+
+  responses:
+    Status:
+      description: OK
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/StatusResponse" }
+    Unauthorized:
+      description: Missing or invalid bearer token
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    Forbidden:
+      description: Authenticated but missing the required role
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    BadRequest:
+      description: Invalid request or operation not allowed in the current state
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  schemas:
+    StatusResponse:
+      type: object
+      properties:
+        status: { type: string, example: ok }
+
+    ReadyResponse:
+      type: object
+      properties:
+        status: { type: string, example: ready }
+        error: { type: string }
+
+    ReasonRequest:
+      type: object
+      properties:
+        reason: { type: string }
+
+    KillSwitchRequest:
+      type: object
+      properties:
+        reason: { type: string }
+        allow_close: { type: boolean }
+
+    BacktestRequest:
+      type: object
+      properties:
+        symbol: { type: string }
+        timeframe: { type: string }
+        strategy_name: { type: string }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: INVALID_OPERATION_MODE }
+            message: { type: string }
+            details: { type: object }
+            request_id: { type: string }
+
+    Account:
+      type: object
+      properties:
+        id: { type: string }
+        balance: { type: string }
+        equity: { type: string }
+        available_balance: { type: string }
+        peak_equity: { type: string }
+        daily_pnl: { type: string }
+        weekly_pnl: { type: string }
+        current_drawdown: { type: string }
+        operational_mode: { type: string, enum: [PAPER, TESTNET, REAL, PAUSED, CLOSE_ONLY, KILL_SWITCH] }
+        version: { type: integer }
+        updated_at: { type: string, format: date-time }
+
+    Position:
+      type: object
+      properties:
+        id: { type: string }
+        symbol: { type: string }
+        side: { type: string, enum: [BUY, SELL] }
+        quantity: { type: string }
+        entry_price: { type: string }
+        current_price: { type: string }
+        stop_price: { type: string, nullable: true }
+        target_price: { type: string, nullable: true }
+        unrealized_pnl: { type: string }
+        realized_pnl: { type: string }
+        status: { type: string, enum: [OPEN, CLOSED] }
+        version: { type: integer }
+        opened_at: { type: string, format: date-time }
+        closed_at: { type: string, format: date-time, nullable: true }
+
+    Order:
+      type: object
+      properties:
+        id: { type: string }
+        client_order_id: { type: string }
+        broker_order_id: { type: string }
+        symbol: { type: string }
+        side: { type: string, enum: [BUY, SELL] }
+        type: { type: string, enum: [MARKET, LIMIT, STOP_MARKET, STOP_LIMIT] }
+        quantity: { type: string }
+        filled_quantity: { type: string }
+        requested_price: { type: string, nullable: true }
+        average_execution_price: { type: string, nullable: true }
+        stop_price: { type: string, nullable: true }
+        target_price: { type: string, nullable: true }
+        status:
+          type: string
+          enum: [PENDING, SUBMITTED, PARTIALLY_FILLED, FILLED, CANCELLED, REJECTED, FAILED, UNKNOWN]
+        strategy_name: { type: string }
+        signal_id: { type: string }
+        risk_decision_id: { type: string }
+        failure_reason: { type: string }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Signal:
+      type: object
+      properties:
+        id: { type: string }
+        symbol: { type: string }
+        side: { type: string, enum: [BUY, SELL] }
+        entry_price: { type: string }
+        stop_price: { type: string }
+        target_price: { type: string }
+        confidence: { type: string }
+        strategy_name: { type: string }
+        market_regime: { type: string, enum: [TRENDING, RANGE_BOUND, VOLATILE, UNKNOWN] }
+        created_at: { type: string, format: date-time }
+        valid_until: { type: string, format: date-time }
+
+    RiskDecision:
+      type: object
+      properties:
+        id: { type: string }
+        signal_id: { type: string }
+        allowed: { type: boolean }
+        original_position_size: { type: string }
+        approved_position_size: { type: string }
+        reason_codes: { type: array, items: { type: string } }
+        applied_rules: { type: array, items: { type: string } }
+        event_restrictions: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+
+    MarketEvent:
+      type: object
+      properties:
+        id: { type: string }
+        event_type: { type: string }
+        direction: { type: string, enum: [BULLISH, BEARISH, NEUTRAL] }
+        severity: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
+        confidence: { type: string }
+        affected_assets: { type: array, items: { type: string } }
+        action: { type: string, enum: [NORMAL, REDUCE, BLOCK_NEW_ENTRIES, REVIEW_REQUIRED, KILL_SWITCH] }
+        source_count: { type: integer }
+        has_official_source: { type: boolean }
+        published_at: { type: string, format: date-time }
+        detected_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        status: { type: string, enum: [ACTIVE, EXPIRED, RESOLVED] }
+
+    Incident:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string }
+        severity: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
+        description: { type: string }
+        source: { type: string }
+        related_entity_id: { type: string }
+        status: { type: string, enum: [OPEN, RESOLVED] }
+        detected_at: { type: string, format: date-time }
+        resolved_at: { type: string, format: date-time, nullable: true }
+        resolution: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Dashboard:
+      type: object
+      properties:
+        account: { $ref: "#/components/schemas/Account" }
+        positions: { type: array, items: { $ref: "#/components/schemas/Position" } }
+        open_orders: { type: array, items: { $ref: "#/components/schemas/Order" } }
+        recent_signals: { type: array, items: { $ref: "#/components/schemas/Signal" } }
+        recent_risk_decisions: { type: array, items: { $ref: "#/components/schemas/RiskDecision" } }
+        active_events: { type: array, items: { $ref: "#/components/schemas/MarketEvent" } }
+        active_incidents: { type: array, items: { $ref: "#/components/schemas/Incident" } }
+        integrations:
+          type: object
+          properties:
+            broker_healthy: { type: boolean }
+            quant_engine_healthy: { type: boolean }
+            llm_healthy: { type: boolean }
+        operational_mode: { type: string }
+        last_reconciliation_at: { type: string, format: date-time, nullable: true }
