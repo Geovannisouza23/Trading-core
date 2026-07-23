@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package quant.v1;
+
+option go_package = "trading-core/internal/contracts/grpc/quant/generated;quantv1";
+
+import "google/protobuf/timestamp.proto";
+
+// QuantEngine is the contract the Go core will use to talk to the external
+// Rust quantitative engine over gRPC. It is not implemented or compiled in
+// this delivery (see internal/contracts/grpc/quant/generated/doc.go); the
+// Go application uses a deterministic in-process fake
+// (internal/infrastructure/external/quant/grpc) that satisfies the
+// equivalent application/ports/output.QuantEngine Go interface today.
+//
+// The Quant Engine NEVER places, sizes or approves an order. It only
+// proposes a candidate signal; internal/application/usecase/evaluate_risk.go
+// is the only thing allowed to approve it, and internal/application/usecase
+// /execute_approved_order.go is the only thing allowed to send it to a
+// broker.
+service QuantEngine {
+  rpc EvaluateSignal(EvaluateSignalRequest) returns (EvaluateSignalResponse);
+  rpc AnalyzeMarketRegime(AnalyzeMarketRegimeRequest) returns (AnalyzeMarketRegimeResponse);
+}
+
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BUY = 1;
+  SIDE_SELL = 2;
+}
+
+enum MarketRegime {
+  MARKET_REGIME_UNSPECIFIED = 0;
+  MARKET_REGIME_TRENDING = 1;
+  MARKET_REGIME_RANGE_BOUND = 2;
+  MARKET_REGIME_VOLATILE = 3;
+}
+
+message Candle {
+  string symbol = 1;
+  string timeframe = 2;
+  string open = 3;       // decimal-as-string, never a float
+  string high = 4;
+  string low = 5;
+  string close = 6;
+  string volume = 7;
+  google.protobuf.Timestamp open_time = 8;
+  google.protobuf.Timestamp close_time = 9;
+}
+
+message EvaluateSignalRequest {
+  Candle candle = 1;
+  repeated Candle recent_candles = 2;
+}
+
+message EvaluateSignalResponse {
+  bool has_signal = 1;
+  string symbol = 2;
+  Side side = 3;
+  string entry_price = 4;
+  string stop_price = 5;
+  string target_price = 6;
+  string confidence = 7; // decimal string in [0, 1]
+  string strategy_name = 8;
+  MarketRegime regime = 9;
+}
+
+message AnalyzeMarketRegimeRequest {
+  string symbol = 1;
+  repeated Candle recent_candles = 2;
+}
+
+message AnalyzeMarketRegimeResponse {
+  MarketRegime regime = 1;
+}
