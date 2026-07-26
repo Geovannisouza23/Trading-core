@@ -1,0 +1,646 @@
+syntax = "proto3";
+
+package quant.v1;
+
+// Vendored, byte-for-byte copy of the canonical contract at
+// ../quant-engine/proto/quant/v1/quant_engine.proto — this repo (Go) is a
+// consumer, not the source of truth. If the Rust side changes this
+// contract, re-copy it here and re-run `make proto`. The only intentional
+// deviation from the source file is the `go_package` option below (Go
+// tooling metadata, not part of the wire contract): the source file's
+// own comment already names this exact path as "reference for a future
+// Go-side migration". See docs/decisions/0010-real-grpc-client-for-quant-engine.md.
+//
+// Supersedes and is NOT byte-compatible with the old placeholder that
+// used to live at internal/contracts/grpc/quant/quant_engine.proto (2
+// RPCs, a 3-state MarketRegime, never compiled) — see ADR 0008 and ADR
+// 0010.
+//
+// Hard boundary: the Quant Engine proposes. It NEVER returns a final
+// position size, leverage, risk approval, or execution command. Only the
+// Trading Core (Go), after its own Risk Manager approves, may place an
+// order. No message below carries a field that could be mistaken for one
+// of those — this is also enforced by tests/architecture (grep for
+// forbidden field names).
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+option go_package = "trading-core/internal/contracts/grpc/quant/v1;quantv1";
+
+// ---------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------
+
+service QuantEngineService {
+  rpc EvaluateSignal(EvaluateSignalRequest) returns (EvaluateSignalResponse);
+
+  rpc CalculateFeatures(CalculateFeaturesRequest) returns (CalculateFeaturesResponse);
+
+  rpc AnalyzeMarketRegime(AnalyzeMarketRegimeRequest) returns (AnalyzeMarketRegimeResponse);
+
+  rpc EvaluateModel(EvaluateModelRequest) returns (EvaluateModelResponse);
+
+  rpc RegisterDecisionOutcome(RegisterDecisionOutcomeRequest) returns (RegisterDecisionOutcomeResponse);
+
+  rpc ValidateStrategy(ValidateStrategyRequest) returns (ValidateStrategyResponse);
+
+  rpc RunBacktest(RunBacktestRequest) returns (RunBacktestResponse);
+
+  rpc GetBacktestResult(GetBacktestResultRequest) returns (GetBacktestResultResponse);
+
+  rpc StreamBacktestProgress(StreamBacktestProgressRequest) returns (stream BacktestProgressResponse);
+
+  rpc RunOptimization(RunOptimizationRequest) returns (RunOptimizationResponse);
+
+  rpc GetOptimizationResult(GetOptimizationResultRequest) returns (GetOptimizationResultResponse);
+
+  rpc ExportDataset(ExportDatasetRequest) returns (ExportDatasetResponse);
+
+  rpc GetFeatureSchema(GetFeatureSchemaRequest) returns (GetFeatureSchemaResponse);
+
+  rpc GetModelMetadata(GetModelMetadataRequest) returns (GetModelMetadataResponse);
+
+  rpc ReloadApprovedModel(ReloadApprovedModelRequest) returns (ReloadApprovedModelResponse);
+}
+
+// ---------------------------------------------------------------------
+// Common enums
+// ---------------------------------------------------------------------
+
+enum Action {
+  ACTION_UNSPECIFIED = 0;
+  ACTION_BUY = 1;
+  ACTION_SELL = 2;
+  ACTION_HOLD = 3;
+}
+
+// 10 states, per docs/decisions — a deliberate redesign of trading-core's
+// 3-state placeholder enum.
+enum MarketRegime {
+  MARKET_REGIME_UNSPECIFIED = 0;
+  MARKET_REGIME_TRENDING_UP = 1;
+  MARKET_REGIME_TRENDING_DOWN = 2;
+  MARKET_REGIME_RANGING = 3;
+  MARKET_REGIME_HIGH_VOLATILITY = 4;
+  MARKET_REGIME_LOW_VOLATILITY = 5;
+  MARKET_REGIME_BREAKOUT = 6;
+  MARKET_REGIME_PANIC = 7;
+  MARKET_REGIME_ILLIQUID = 8;
+  MARKET_REGIME_NEWS_EVENT = 9;
+  MARKET_REGIME_UNKNOWN = 10;
+}
+
+enum InferenceMode {
+  INFERENCE_MODE_UNSPECIFIED = 0;
+  INFERENCE_MODE_DISABLED = 1;
+  INFERENCE_MODE_PRODUCTION = 2;
+  INFERENCE_MODE_SHADOW = 3;
+  INFERENCE_MODE_COMPARE = 4;
+}
+
+enum NewsDirection {
+  NEWS_DIRECTION_UNSPECIFIED = 0;
+  NEWS_DIRECTION_BULLISH = 1;
+  NEWS_DIRECTION_BEARISH = 2;
+  NEWS_DIRECTION_NEUTRAL = 3;
+}
+
+enum NewsSeverity {
+  NEWS_SEVERITY_UNSPECIFIED = 0;
+  NEWS_SEVERITY_LOW = 1;
+  NEWS_SEVERITY_MEDIUM = 2;
+  NEWS_SEVERITY_HIGH = 3;
+  NEWS_SEVERITY_CRITICAL = 4;
+}
+
+enum ExecutionModel {
+  EXECUTION_MODEL_UNSPECIFIED = 0;
+  EXECUTION_MODEL_CLOSE_PRICE = 1;
+  EXECUTION_MODEL_NEXT_OPEN = 2;
+  EXECUTION_MODEL_OHLC = 3;
+  EXECUTION_MODEL_CONSERVATIVE = 4;
+}
+
+enum SearchAlgorithm {
+  SEARCH_ALGORITHM_UNSPECIFIED = 0;
+  SEARCH_ALGORITHM_GRID = 1;
+  SEARCH_ALGORITHM_RANDOM = 2;
+}
+
+enum OptimizationObjective {
+  OPTIMIZATION_OBJECTIVE_UNSPECIFIED = 0;
+  OPTIMIZATION_OBJECTIVE_NET_PROFIT = 1;
+  OPTIMIZATION_OBJECTIVE_PROFIT_FACTOR = 2;
+  OPTIMIZATION_OBJECTIVE_SHARPE = 3;
+  OPTIMIZATION_OBJECTIVE_SORTINO = 4;
+  OPTIMIZATION_OBJECTIVE_MIN_DRAWDOWN = 5;
+  OPTIMIZATION_OBJECTIVE_RISK_ADJUSTED_RETURN = 6;
+  OPTIMIZATION_OBJECTIVE_STABILITY = 7;
+}
+
+// QUEUED/RUNNING/COMPLETED/FAILED/CANCELLED — shared by backtest and
+// optimization job status fields.
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  JOB_STATUS_QUEUED = 1;
+  JOB_STATUS_RUNNING = 2;
+  JOB_STATUS_COMPLETED = 3;
+  JOB_STATUS_FAILED = 4;
+  JOB_STATUS_CANCELLED = 5;
+}
+
+// ---------------------------------------------------------------------
+// Common messages
+// ---------------------------------------------------------------------
+
+message Candle {
+  string symbol = 1;
+  string timeframe = 2;
+  google.protobuf.Timestamp open_time = 3;
+  google.protobuf.Timestamp close_time = 4;
+  string open = 5;   // decimal-as-string, never a float
+  string high = 6;
+  string low = 7;
+  string close = 8;
+  string volume = 9;
+  bool closed = 10;
+}
+
+message OrderBookLevel {
+  string price = 1;
+  string quantity = 2;
+}
+
+message OrderBookSnapshot {
+  string symbol = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  repeated OrderBookLevel bids = 3;
+  repeated OrderBookLevel asks = 4;
+}
+
+message FundingSnapshot {
+  string symbol = 1;
+  string funding_rate = 2;
+  google.protobuf.Timestamp next_funding_time = 3;
+  google.protobuf.Timestamp observed_at = 4;
+}
+
+message OpenInterestSnapshot {
+  string symbol = 1;
+  string open_interest = 2;
+  google.protobuf.Timestamp observed_at = 3;
+}
+
+// Field-for-field mirror of trading-core's already-accepted
+// internal/contracts/schemas/llm/event_assessment.schema.json — no
+// divergent shape invented on the Rust side.
+message NewsContext {
+  string event_type = 1;
+  NewsDirection direction = 2;
+  NewsSeverity severity = 3;
+  string confidence = 4; // decimal string in [0, 1]
+  repeated string affected_assets = 5;
+  string action = 6;
+  int32 source_count = 7;
+  bool has_official_source = 8;
+}
+
+message DataQualityReport {
+  uint32 total_candles = 1;
+  uint32 valid_candles = 2;
+  uint32 duplicate_candles = 3;
+  uint32 gap_count = 4;
+  uint32 out_of_order_candles = 5;
+  uint32 stale_candles = 6;
+  uint32 incomplete_candles = 7;
+  string quality_score = 8; // decimal string in [0, 1]
+  repeated string warnings = 9;
+}
+
+message FeatureEntry {
+  string name = 1;
+  oneof value {
+    string numeric_value = 2;      // decimal string
+    string categorical_value = 3;
+    bool bool_value = 4;
+  }
+}
+
+message ModelPrediction {
+  string model_name = 1;
+  string model_version = 2;
+  string feature_schema_version = 3;
+  string predicted_target = 4;
+  string success_probability = 5; // decimal string in [0, 1]
+  string expected_return = 6;
+  string stop_probability = 7;    // decimal string in [0, 1]
+  string confidence = 8;          // decimal string in [0, 1]
+  google.protobuf.Timestamp inference_timestamp = 9;
+  google.protobuf.Duration inference_duration = 10;
+  repeated string warnings = 11;
+}
+
+message BacktestConfig {
+  string symbol = 1;
+  string timeframe = 2;
+  string strategy_name = 3;
+  string strategy_version = 4;
+  map<string, string> strategy_params = 5;
+  string initial_capital = 6;
+  string fee_rate = 7;
+  string slippage = 8;
+  ExecutionModel execution_model = 9;
+  google.protobuf.Timestamp start_at = 10;
+  google.protobuf.Timestamp end_at = 11;
+  bool allow_short = 12;
+  string model_name = 13;  // optional — empty means no model in the loop
+  string model_version = 14;
+  bool generate_training_records = 15;
+}
+
+message BacktestMetrics {
+  string total_return = 1;
+  string net_profit = 2;
+  string gross_profit = 3;
+  string gross_loss = 4;
+  string win_rate = 5;
+  string loss_rate = 6;
+  uint32 total_trades = 7;
+  uint32 winning_trades = 8;
+  uint32 losing_trades = 9;
+  string average_trade = 10;
+  string average_winner = 11;
+  string average_loser = 12;
+  string largest_winner = 13;
+  string largest_loser = 14;
+  string profit_factor = 15;      // empty string = undefined (e.g. zero losses)
+  string payoff_ratio = 16;
+  string expectancy = 17;
+  string max_drawdown = 18;
+  string average_drawdown = 19;
+  string recovery_factor = 20;
+  string sharpe_ratio = 21;       // empty string = undefined (zero variance)
+  string sortino_ratio = 22;
+  string calmar_ratio = 23;
+  string volatility = 24;
+  string exposure_time_pct = 25;
+  string average_holding_period_secs = 26;
+  uint32 max_consecutive_wins = 27;
+  uint32 max_consecutive_losses = 28;
+  uint32 break_even_trades = 29;
+  string total_fees = 30;
+  string total_slippage = 31;
+  string final_equity = 32;
+  string brier_score = 33;
+  string log_loss = 34;
+  string precision = 35;
+  string recall = 36;
+  string f1_score = 37;
+  string calibration_error = 38;
+  string prediction_coverage = 39;
+  map<string, string> performance_by_regime = 40;
+  map<string, string> performance_by_strategy = 41;
+  map<string, string> performance_by_model = 42;
+}
+
+message TradeRecord {
+  string trade_id = 1;
+  Action side = 2;
+  string entry_price = 3;
+  string exit_price = 4;
+  string quantity = 5;
+  google.protobuf.Timestamp entered_at = 6;
+  google.protobuf.Timestamp exited_at = 7;
+  string pnl = 8;
+  string fees = 9;
+  string slippage = 10;
+  string exit_reason = 11;
+  string mfe = 12;
+  string mae = 13;
+}
+
+message EquityPoint {
+  google.protobuf.Timestamp at = 1;
+  string equity = 2;
+}
+
+// ---------------------------------------------------------------------
+// EvaluateSignal
+// ---------------------------------------------------------------------
+
+message EvaluateSignalRequest {
+  string request_id = 1;
+  string correlation_id = 2;
+  string symbol = 3;
+  string timeframe = 4;
+  repeated Candle candles = 5;
+  OrderBookSnapshot order_book = 6;       // optional
+  FundingSnapshot funding = 7;            // optional
+  OpenInterestSnapshot open_interest = 8; // optional
+  NewsContext news_context = 9;           // optional
+  repeated string requested_strategies = 10;
+  map<string, string> params = 11;
+  string requested_model = 12;            // optional, empty = current production model
+  InferenceMode inference_mode = 13;
+  google.protobuf.Timestamp deadline = 14;
+  google.protobuf.Timestamp requested_at = 15;
+}
+
+message EvaluateSignalResponse {
+  string signal_id = 1;
+  Action action = 2;
+  string strategy = 3;
+  string strategy_version = 4;
+  string feature_version = 5;
+  MarketRegime market_regime = 6;
+  string entry_price = 7;   // empty for HOLD
+  string stop_price = 8;    // empty for HOLD
+  string target_price = 9;  // empty for HOLD
+  string raw_confidence = 10;
+  ModelPrediction model_prediction = 11; // present only if inference ran
+  string adjusted_confidence = 12;
+  repeated string reasons = 13;
+  repeated string indicators_used = 14;
+  repeated FeatureEntry features = 15;
+  DataQualityReport data_quality = 16;
+  string engine_version = 17;
+  string model_version = 18;  // empty if no model was used
+  InferenceMode inference_mode = 19;
+  google.protobuf.Timestamp created_at = 20;
+  google.protobuf.Timestamp valid_until = 21;
+}
+
+// ---------------------------------------------------------------------
+// CalculateFeatures
+// ---------------------------------------------------------------------
+
+message CalculateFeaturesRequest {
+  string request_id = 1;
+  string symbol = 2;
+  string timeframe = 3;
+  repeated Candle candles = 4;
+  OrderBookSnapshot order_book = 5;
+  FundingSnapshot funding = 6;
+  OpenInterestSnapshot open_interest = 7;
+  NewsContext news_context = 8;
+  string feature_schema_version = 9; // optional pin; empty = current
+}
+
+message CalculateFeaturesResponse {
+  string feature_set_id = 1;
+  string schema_version = 2;
+  repeated FeatureEntry features = 3;
+  DataQualityReport quality = 4;
+  string deterministic_hash = 5;
+  google.protobuf.Timestamp calculated_at = 6;
+}
+
+// ---------------------------------------------------------------------
+// AnalyzeMarketRegime
+// ---------------------------------------------------------------------
+
+message AnalyzeMarketRegimeRequest {
+  string request_id = 1;
+  string symbol = 2;
+  string timeframe = 3;
+  repeated Candle candles = 4;
+}
+
+message AnalyzeMarketRegimeResponse {
+  MarketRegime regime = 1;
+  string confidence = 2;
+  repeated string reasons = 3;
+  repeated string indicators_used = 4;
+  string detector_version = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp valid_until = 7;
+}
+
+// ---------------------------------------------------------------------
+// EvaluateModel
+// ---------------------------------------------------------------------
+
+message EvaluateModelRequest {
+  string request_id = 1;
+  string model_name = 2;
+  string model_version = 3; // optional; empty = active/production version
+  repeated FeatureEntry features = 4;
+  string feature_schema_version = 5;
+}
+
+message EvaluateModelResponse {
+  ModelPrediction prediction = 1;
+}
+
+// ---------------------------------------------------------------------
+// RegisterDecisionOutcome
+// ---------------------------------------------------------------------
+
+message RegisterDecisionOutcomeRequest {
+  string decision_id = 1;
+  bool order_created = 2;
+  bool executed = 3;
+  string rejection_reason = 4; // populated when order_created == false
+  string entry_price = 5;
+  string exit_price = 6;
+  string quantity = 7;
+  string fees = 8;
+  string slippage = 9;
+  string pnl = 10;
+  string exit_reason = 11;
+  google.protobuf.Timestamp entry_at = 12;
+  google.protobuf.Timestamp exit_at = 13;
+}
+
+message RegisterDecisionOutcomeResponse {
+  bool accepted = 1;
+  string training_record_id = 2;
+}
+
+// ---------------------------------------------------------------------
+// ValidateStrategy
+// ---------------------------------------------------------------------
+
+message ValidateStrategyRequest {
+  string strategy_name = 1;
+  string strategy_version = 2;
+  map<string, string> params = 3;
+}
+
+message ValidateStrategyResponse {
+  bool valid = 1;
+  repeated string errors = 2;
+  repeated string warnings = 3;
+  uint32 minimum_candles = 4;
+  repeated MarketRegime compatible_regimes = 5;
+}
+
+// ---------------------------------------------------------------------
+// RunBacktest / GetBacktestResult / StreamBacktestProgress
+// ---------------------------------------------------------------------
+
+message RunBacktestRequest {
+  string request_id = 1;
+  BacktestConfig config = 2;
+  repeated Candle candles = 3;
+}
+
+message RunBacktestResponse {
+  string backtest_id = 1;
+  JobStatus status = 2;
+}
+
+message GetBacktestResultRequest {
+  string backtest_id = 1;
+}
+
+message GetBacktestResultResponse {
+  string backtest_id = 1;
+  JobStatus status = 2;
+  BacktestMetrics metrics = 3;
+  repeated TradeRecord trades = 4;
+  repeated EquityPoint equity_curve = 5;
+  string error_message = 6;
+  google.protobuf.Timestamp completed_at = 7;
+}
+
+message StreamBacktestProgressRequest {
+  string backtest_id = 1;
+}
+
+message BacktestProgressResponse {
+  string backtest_id = 1;
+  JobStatus status = 2;
+  string percent_complete = 3; // decimal string in [0, 100]
+  uint64 candles_processed = 4;
+  uint64 total_candles = 5;
+  uint64 trades_so_far = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+// ---------------------------------------------------------------------
+// RunOptimization / GetOptimizationResult
+// ---------------------------------------------------------------------
+
+message ParameterRange {
+  string name = 1;
+  string min = 2;             // empty when using `choices` instead of a range
+  string max = 3;
+  string step = 4;
+  repeated string choices = 5; // discrete choice set, alternative to min/max/step
+}
+
+message RunOptimizationRequest {
+  string request_id = 1;
+  BacktestConfig base_config = 2;
+  repeated Candle candles = 3;
+  repeated ParameterRange search_space = 4;
+  SearchAlgorithm algorithm = 5;
+  OptimizationObjective objective = 6;
+  uint32 max_iterations = 7;
+  bool walk_forward = 8;
+  uint32 walk_forward_windows = 9;
+  bool monte_carlo = 10;
+  uint32 monte_carlo_runs = 11;
+}
+
+message RunOptimizationResponse {
+  string optimization_id = 1;
+  JobStatus status = 2;
+}
+
+message ParameterAssignment {
+  string name = 1;
+  string value = 2;
+}
+
+message OptimizationCandidateResult {
+  repeated ParameterAssignment parameters = 1;
+  string score = 2;
+  BacktestMetrics metrics = 3;
+}
+
+message GetOptimizationResultRequest {
+  string optimization_id = 1;
+}
+
+message GetOptimizationResultResponse {
+  string optimization_id = 1;
+  JobStatus status = 2;
+  OptimizationCandidateResult best = 3;
+  repeated OptimizationCandidateResult top_results = 4;
+  string error_message = 5;
+  google.protobuf.Timestamp completed_at = 6;
+}
+
+// ---------------------------------------------------------------------
+// ExportDataset
+// ---------------------------------------------------------------------
+
+message ExportDatasetRequest {
+  string request_id = 1;
+  string dataset_name = 2;
+  string dataset_version = 3;
+  repeated string symbols = 4;
+  repeated string timeframes = 5;
+  google.protobuf.Timestamp start_at = 6;
+  google.protobuf.Timestamp end_at = 7;
+  string label_version = 8;
+}
+
+message ExportDatasetResponse {
+  string export_id = 1;
+  JobStatus status = 2;
+}
+
+// ---------------------------------------------------------------------
+// GetFeatureSchema
+// ---------------------------------------------------------------------
+
+message GetFeatureSchemaRequest {
+  string schema_version = 1; // empty = current
+}
+
+message FeatureSchemaEntry {
+  string name = 1;
+  string data_type = 2; // "numeric" | "categorical" | "bool"
+  string description = 3;
+  bool nullable = 4;
+  string source = 5;
+}
+
+message GetFeatureSchemaResponse {
+  string schema_version = 1;
+  repeated FeatureSchemaEntry features = 2;
+}
+
+// ---------------------------------------------------------------------
+// GetModelMetadata / ReloadApprovedModel
+// ---------------------------------------------------------------------
+
+message GetModelMetadataRequest {
+  string model_name = 1;
+  string model_version = 2; // empty = currently loaded version
+}
+
+message GetModelMetadataResponse {
+  string model_name = 1;
+  string model_version = 2;
+  string state = 3;
+  string feature_schema_version = 4;
+  string artifact_sha256 = 5;
+  google.protobuf.Timestamp approved_at = 6;
+  bool retired = 7;
+}
+
+message ReloadApprovedModelRequest {
+  string model_name = 1;
+  string stage = 2; // "APPROVED" | "CANARY" | "PRODUCTION"
+}
+
+message ReloadApprovedModelResponse {
+  bool reloaded = 1;
+  string model_version = 2;
+  string message = 3;
+}

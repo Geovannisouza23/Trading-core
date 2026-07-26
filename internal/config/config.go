@@ -13,6 +13,8 @@ type Config struct {
 	Risk          RiskConfig
 	LLM           LLMConfig
 	Quant         QuantConfig
+	Nats          NatsConfig
+	Redis         RedisConfig
 	Observability ObservabilityConfig
 	Security      SecurityConfig
 
@@ -51,6 +53,14 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	nats, err := loadNatsConfig()
+	if err != nil {
+		return nil, err
+	}
+	redis, err := loadRedisConfig()
+	if err != nil {
+		return nil, err
+	}
 	observability, err := loadObservabilityConfig()
 	if err != nil {
 		return nil, err
@@ -72,6 +82,8 @@ func Load() (*Config, error) {
 		Risk:                          risk,
 		LLM:                           llm,
 		Quant:                         quant,
+		Nats:                          nats,
+		Redis:                         redis,
 		Observability:                 observability,
 		Security:                      security,
 		UsingInsecureDefaultJWTSecret: usingDefault,

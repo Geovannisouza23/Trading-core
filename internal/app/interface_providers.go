@@ -21,6 +21,7 @@ import (
 	marketconsumer "trading-core/internal/interfaces/consumer/market"
 	orderconsumer "trading-core/internal/interfaces/consumer/order"
 	outboxconsumer "trading-core/internal/interfaces/consumer/outbox"
+	quantevents "trading-core/internal/interfaces/consumer/quantevents"
 
 	wshandler "trading-core/internal/interfaces/websocket/handler"
 	wshub "trading-core/internal/interfaces/websocket/hub"
@@ -47,6 +48,26 @@ func provideWebSocketHandler(h *wshub.Hub, logger *slog.Logger) *wshandler.Handl
 	return wshandler.NewHandler(h, logger)
 }
 
+func provideBacktestHandler(backtests input.BacktestService) *httphandler.BacktestHandler {
+	return httphandler.NewBacktestHandler(backtests)
+}
+
+func provideOptimizationHandler(optimizations input.OptimizationService) *httphandler.OptimizationHandler {
+	return httphandler.NewOptimizationHandler(optimizations)
+}
+
+func provideDatasetHandler(exports input.DatasetExportService) *httphandler.DatasetHandler {
+	return httphandler.NewDatasetHandler(exports)
+}
+
+func provideStrategyHandler(diagnostics input.QuantDiagnosticsService) *httphandler.StrategyHandler {
+	return httphandler.NewStrategyHandler(diagnostics)
+}
+
+func provideQuantDiagnosticsHandler(diagnostics input.QuantDiagnosticsService, publisher input.QuantEventPublisherService) *httphandler.QuantDiagnosticsHandler {
+	return httphandler.NewQuantDiagnosticsHandler(diagnostics, publisher)
+}
+
 func provideRouter(
 	cfg *config.Config,
 	logger *slog.Logger,
@@ -54,6 +75,11 @@ func provideRouter(
 	pool *pgxpool.Pool,
 	queryHandler *httphandler.QueryHandler,
 	systemHandler *httphandler.SystemHandler,
+	backtestHandler *httphandler.BacktestHandler,
+	optimizationHandler *httphandler.OptimizationHandler,
+	datasetHandler *httphandler.DatasetHandler,
+	strategyHandler *httphandler.StrategyHandler,
+	quantDiagnosticsHandler *httphandler.QuantDiagnosticsHandler,
 	ws *wshandler.Handler,
 ) http.Handler {
 	return httprouter.New(httprouter.Config{
@@ -74,6 +100,12 @@ func provideRouter(
 
 		QueryHandler:  queryHandler,
 		SystemHandler: systemHandler,
+
+		BacktestHandler:         backtestHandler,
+		OptimizationHandler:     optimizationHandler,
+		DatasetHandler:          datasetHandler,
+		StrategyHandler:         strategyHandler,
+		QuantDiagnosticsHandler: quantDiagnosticsHandler,
 	})
 }
 
@@ -104,4 +136,8 @@ func provideOrderConsumer(m *metrics.Metrics) *orderconsumer.Consumer {
 
 func provideOutboxConsumer(h *wshub.Hub) *outboxconsumer.Consumer {
 	return outboxconsumer.NewConsumer(h)
+}
+
+func provideQuantEventsConsumer(h *wshub.Hub, logger *slog.Logger) *quantevents.Consumer {
+	return quantevents.NewConsumer(h, logger)
 }

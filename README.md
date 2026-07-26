@@ -34,6 +34,27 @@ both waiting on `migrate` to finish successfully. The system starts in
 
 To stop and wipe the database volume: `make docker-down`.
 
+### Sharing NATS/Redis with quant-engine
+
+`api`/`worker` also attach to `aegis-net`, an **external** Docker
+network — the mechanism that lets this stack reach the NATS/Redis
+containers `quant-engine`'s own `docker-compose.yml` brings up, by
+service name, across the two separate Compose projects. One-time setup,
+before bringing up either stack:
+
+```bash
+docker network create aegis-net
+```
+
+Then start `quant-engine` first (or in either order — both sides are
+optional/best-effort if the other isn't up yet): `NATS_URL=nats://nats:4222`
+and `REDIS_ADDR=redis:6379` in this repo's `docker-compose.yml` resolve
+via Docker's embedded DNS once both stacks share `aegis-net`. Without
+it, `NATS_REQUIRED=false`/`REDIS_REQUIRED=false` (the defaults) mean this
+stack still starts fine — events fall back to the in-memory bus, the
+market-data cache and NATS-publish idempotency guard are simply
+disabled. See [ADR 0011](docs/decisions/0011-real-nats-client-and-redis.md).
+
 ## Quick start (local, no Docker)
 
 Requires a running PostgreSQL 16 reachable with the credentials in

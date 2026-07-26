@@ -26,3 +26,26 @@ type ListEventsQuery struct {
 type ListIncidentsQuery struct {
 	Limit int
 }
+
+// --- Quant Engine capability queries ---------------------------------------
+
+type GetBacktestResultQuery struct {
+	BacktestID string
+}
+
+type StreamBacktestProgressQuery struct {
+	BacktestID string
+}
+
+type GetOptimizationResultQuery struct {
+	OptimizationID string
+}
+
+type GetFeatureSchemaQuery struct {
+	SchemaVersion string // empty = current
+}
+
+type GetModelMetadataQuery struct {
+	ModelName    string
+	ModelVersion string // empty = currently loaded version
+}

@@ -1,3 +1,12 @@
+# api/worker also join `aegis-net`, an external network shared with
+# sibling repos (quant-engine) — `docker network create aegis-net` once,
+# before `docker compose up` in either repo. NATS_URL/REDIS_ADDR below
+# resolve `nats`/`redis` by the exact service names quant-engine's own
+# docker-compose.yml gives them — this repo does not run a second,
+# isolated NATS/Redis. See docs/decisions/0011-real-nats-client-and-redis.md
+# and README.md for the one-time setup step. Both are optional (falls
+# back to the in-memory event bus / no cache) if quant-engine's stack
+# isn't up.
 x-app-env: &app-env
   DATABASE_HOST: postgres
   DATABASE_PORT: "5432"
@@ -9,6 +18,10 @@ x-app-env: &app-env
   BROKER_PAPER_STARTING_BALANCE: "10000"
   LLM_PROVIDER: noop
   QUANT_MODE: fake
+  NATS_URL: nats://nats:4222
+  NATS_REQUIRED: "false"
+  REDIS_ADDR: redis:6379
+  REDIS_REQUIRED: "false"
   OBSERVABILITY_SERVICE_NAME: trading-core
   OBSERVABILITY_ENVIRONMENT: docker-compose
   OBSERVABILITY_LOG_LEVEL: info
@@ -60,7 +73,7 @@ services:
       timeout: 3s
       retries: 5
       start_period: 10s
-    networks: [trading_core]
+    networks: [trading_core, aegis-net]
 
   worker:
     build: .
@@ -71,10 +84,12 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-    networks: [trading_core]
+    networks: [trading_core, aegis-net]
 
 networks:
   trading_core:
+  aegis-net:
+    external: true
 
 volumes:
   trading_core_pgdata:

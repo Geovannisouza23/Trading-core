@@ -228,17 +228,222 @@ paths:
 
   /v1/backtest/request:
     post:
-      summary: Not implemented in this delivery — returns 501 with a structured explanation
+      summary: Submit a backtest job to quant-engine (real gRPC call — see docs/decisions/0010-real-grpc-client-for-quant-engine.md)
+      description: >
+        Requires QUANT_MODE=grpc; returns a structured error in fake mode
+        (there is no meaningful fake backtest). The caller supplies the
+        candle window to evaluate — trading-core does not fetch historical
+        data on its own behalf, same as quant-engine's own gRPC contract.
       requestBody:
         content:
           application/json:
             schema: { $ref: "#/components/schemas/BacktestRequest" }
       responses:
-        "501":
-          description: Not implemented
+        "202":
+          description: Backtest accepted, running asynchronously
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StatusResponse" }
+              schema: { $ref: "#/components/schemas/JobAccepted" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/backtest/{id}:
+    get:
+      summary: Poll a backtest job's result
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Backtest status, and metrics/trades/equity curve once completed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BacktestResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/backtest/{id}/stream:
+    get:
+      summary: Follow a backtest job's progress over Server-Sent Events
+      description: Closes after the job reaches a terminal status, same as the underlying StreamBacktestProgress RPC.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: text/event-stream of BacktestProgress JSON payloads
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/optimization/request:
+    post:
+      summary: Submit a hyperparameter search job to quant-engine
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OptimizationRequest" }
+      responses:
+        "202":
+          description: Optimization accepted, running asynchronously
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobAccepted" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/optimization/{id}:
+    get:
+      summary: Poll an optimization job's result
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Optimization status, and best/top candidate results once completed
+          content:
+            application/json:
+              schema: { type: object, description: "See output.GetOptimizationResultResult (Go) for the exact shape." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/dataset/export:
+    post:
+      summary: Trigger a Parquet dataset export on quant-engine
+      description: There is no dedicated poll RPC for this job kind on the wire contract — only the initial status is available.
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DatasetExportRequest" }
+      responses:
+        "202":
+          description: Export accepted, running asynchronously
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobAccepted" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/strategy/validate:
+    post:
+      summary: Ask quant-engine whether a strategy name/version/params combination is valid and usable
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ValidateStrategyRequest" }
+      responses:
+        "200":
+          description: Validation result
+          content:
+            application/json:
+              schema: { type: object, description: "See output.ValidateStrategyResult (Go) for the exact shape." }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/quant/features:
+    post:
+      summary: Ask quant-engine to compute the v1 feature vector for a candle window
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CalculateFeaturesRequest" }
+      responses:
+        "200":
+          description: Computed features and a data-quality report
+          content:
+            application/json:
+              schema: { type: object, description: "See output.CalculateFeaturesResult (Go) for the exact shape." }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/quant/model/evaluate:
+    post:
+      summary: Run a model directly against an already-computed feature vector
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EvaluateModelRequest" }
+      responses:
+        "200":
+          description: Model prediction
+          content:
+            application/json:
+              schema: { type: object, description: "See output.ModelPrediction (Go) for the exact shape." }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/quant/model/reload:
+    post:
+      summary: Validate and reload the APPROVED/CANARY/PRODUCTION model for a stage
+      description: Validates the registry state/hash for the requested stage; does not itself perform a hot-swap (see quant-engine's docs/model-inference.md).
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReloadApprovedModelRequest" }
+      responses:
+        "200":
+          description: Reload result
+          content:
+            application/json:
+              schema: { type: object, description: "See output.ReloadApprovedModelResult (Go) for the exact shape." }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/quant/feature-schema:
+    get:
+      summary: Read the canonical v1 feature schema, or a specific version
+      parameters:
+        - { name: version, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: Feature schema
+          content:
+            application/json:
+              schema: { type: object, description: "See output.GetFeatureSchemaResult (Go) for the exact shape." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/quant/model-metadata:
+    get:
+      summary: Read model registry metadata (never writes it)
+      parameters:
+        - { name: model_name, in: query, required: false, schema: { type: string } }
+        - { name: model_version, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: Model metadata
+          content:
+            application/json:
+              schema: { type: object, description: "See output.GetModelMetadataResult (Go) for the exact shape." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/decisions/{decision_id}/outcome:
+    post:
+      summary: Report the realized outcome of a decision back to quant-engine for training-data purposes
+      description: >
+        The outcome is caller-supplied in this delivery — trading-core does
+        not yet auto-trigger this from order reconciliation (see
+        docs/decisions/0010-real-grpc-client-for-quant-engine.md).
+      parameters:
+        - { name: decision_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterDecisionOutcomeRequest" }
+      responses:
+        "200":
+          description: Outcome accepted
+          content:
+            application/json:
+              schema: { type: object, description: "See output.RegisterDecisionOutcomeResult (Go) for the exact shape." }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
@@ -251,8 +456,9 @@ components:
       description: >
         HS256 JWT with a "roles" claim (array of strings). Read-only /v1/*
         GET endpoints accept any authenticated role; POST /v1/system/*,
-        /v1/paper/reset and /v1/backtest/request require "operator" or
-        "admin".
+        /v1/paper/reset, and every /v1/backtest, /v1/optimization,
+        /v1/dataset, /v1/strategy, /v1/quant, and /v1/decisions/*/outcome
+        endpoint require "operator" or "admin".
 
   parameters:
     Limit:
@@ -316,14 +522,171 @@ components:
         reason: { type: string }
         allow_close: { type: boolean }
 
-    BacktestRequest:
+    JobAccepted:
       type: object
+      properties:
+        backtest_id: { type: string, description: "present on the backtest response" }
+        optimization_id: { type: string, description: "present on the optimization response" }
+        export_id: { type: string, description: "present on the dataset export response" }
+        status: { type: string, enum: [UNSPECIFIED, QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED] }
+
+    CandleRequest:
+      type: object
+      description: One OHLCV bar. Trading-core does not fetch historical candles on the caller's behalf — the caller supplies the window to evaluate, same as quant-engine's own gRPC contract.
+      required: [open_time, close_time, open, high, low, close, volume]
+      properties:
+        open_time: { type: string, format: date-time }
+        close_time: { type: string, format: date-time }
+        open: { type: string, description: "decimal-as-string, never a float" }
+        high: { type: string }
+        low: { type: string }
+        close: { type: string }
+        volume: { type: string }
+
+    BacktestConfigRequest:
+      type: object
+      required: [symbol, timeframe, strategy_name, from, to]
       properties:
         symbol: { type: string }
         timeframe: { type: string }
         strategy_name: { type: string }
+        strategy_version: { type: string }
+        strategy_params: { type: object, additionalProperties: { type: string } }
+        initial_capital: { type: string }
+        fee_rate: { type: string }
+        slippage: { type: string }
+        execution_model: { type: string, enum: [CLOSE_PRICE, NEXT_OPEN, OHLC, CONSERVATIVE] }
         from: { type: string, format: date-time }
         to: { type: string, format: date-time }
+        allow_short: { type: boolean }
+        model_name: { type: string, description: "optional — empty means no model in the loop" }
+        model_version: { type: string }
+        generate_training_records: { type: boolean }
+
+    BacktestRequest:
+      type: object
+      required: [config, candles]
+      properties:
+        config: { $ref: "#/components/schemas/BacktestConfigRequest" }
+        candles:
+          type: array
+          items: { $ref: "#/components/schemas/CandleRequest" }
+
+    BacktestResult:
+      type: object
+      description: metrics/trades/equity_curve mirror quant-engine's BacktestMetrics/TradeRecord/EquityPoint wire messages field for field (decimal values stay strings) — see output.GetBacktestResultResult (Go) for the exact shape.
+      properties:
+        backtest_id: { type: string }
+        status: { type: string, enum: [UNSPECIFIED, QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED] }
+        metrics: { type: object }
+        trades: { type: array, items: { type: object } }
+        equity_curve: { type: array, items: { type: object } }
+        error_message: { type: string }
+        completed_at: { type: string, format: date-time }
+
+    ParameterRangeRequest:
+      type: object
+      description: Either min/max/step (continuous) or choices (discrete) — mutually exclusive.
+      properties:
+        name: { type: string }
+        min: { type: string }
+        max: { type: string }
+        step: { type: string }
+        choices: { type: array, items: { type: string } }
+
+    OptimizationRequest:
+      type: object
+      required: [base_config, search_space]
+      properties:
+        base_config: { $ref: "#/components/schemas/BacktestConfigRequest" }
+        candles:
+          type: array
+          items: { $ref: "#/components/schemas/CandleRequest" }
+        search_space:
+          type: array
+          items: { $ref: "#/components/schemas/ParameterRangeRequest" }
+        algorithm: { type: string, enum: [GRID, RANDOM] }
+        objective: { type: string, enum: [NET_PROFIT, PROFIT_FACTOR, SHARPE, SORTINO, MIN_DRAWDOWN, RISK_ADJUSTED_RETURN, STABILITY] }
+        max_iterations: { type: integer }
+        walk_forward: { type: boolean }
+        walk_forward_windows: { type: integer }
+        monte_carlo: { type: boolean }
+        monte_carlo_runs: { type: integer }
+
+    DatasetExportRequest:
+      type: object
+      required: [dataset_name, dataset_version]
+      properties:
+        dataset_name: { type: string }
+        dataset_version: { type: string }
+        symbols: { type: array, items: { type: string } }
+        timeframes: { type: array, items: { type: string } }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        label_version: { type: string }
+
+    ValidateStrategyRequest:
+      type: object
+      required: [strategy_name]
+      properties:
+        strategy_name: { type: string }
+        strategy_version: { type: string }
+        params: { type: object, additionalProperties: { type: string } }
+
+    CalculateFeaturesRequest:
+      type: object
+      required: [symbol, timeframe]
+      properties:
+        symbol: { type: string }
+        timeframe: { type: string }
+        candles:
+          type: array
+          items: { $ref: "#/components/schemas/CandleRequest" }
+        feature_schema_version: { type: string, description: "optional pin; empty = current" }
+
+    FeatureValueRequest:
+      type: object
+      description: Exactly one of numeric_value/categorical_value/bool_value is meaningful, selected by kind.
+      properties:
+        name: { type: string }
+        kind: { type: string, enum: [numeric, categorical, bool] }
+        numeric_value: { type: string }
+        categorical_value: { type: string }
+        bool_value: { type: boolean }
+
+    EvaluateModelRequest:
+      type: object
+      required: [model_name, features]
+      properties:
+        model_name: { type: string }
+        model_version: { type: string, description: "optional; empty = active/production version" }
+        features:
+          type: array
+          items: { $ref: "#/components/schemas/FeatureValueRequest" }
+        feature_schema_version: { type: string }
+
+    RegisterDecisionOutcomeRequest:
+      type: object
+      properties:
+        order_created: { type: boolean }
+        executed: { type: boolean }
+        rejection_reason: { type: string, description: "populated when order_created == false" }
+        entry_price: { type: string }
+        exit_price: { type: string }
+        quantity: { type: string }
+        fees: { type: string }
+        slippage: { type: string }
+        pnl: { type: string }
+        exit_reason: { type: string }
+        entry_at: { type: string, format: date-time }
+        exit_at: { type: string, format: date-time }
+
+    ReloadApprovedModelRequest:
+      type: object
+      required: [model_name, stage]
+      properties:
+        model_name: { type: string }
+        stage: { type: string, enum: [APPROVED, CANARY, PRODUCTION] }
 
     ErrorResponse:
       type: object

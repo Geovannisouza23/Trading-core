@@ -89,10 +89,21 @@ func RepositoryModule() fx.Option {
 func ExternalModule() fx.Option {
 	return fx.Provide(
 		provideBroker,
+		provideQuantGrpcClient,
 		provideQuantEngine,
+		provideQuantBacktestService,
+		provideQuantOptimizationService,
+		provideQuantDatasetExportService,
+		provideQuantDiagnosticsService,
 		provideEventIntelligence,
 		provideNotifier,
+		provideNatsConnection,
 		provideEventBus,
+		provideQuantEventPublisher,
+		provideActivityPublisher,
+		provideRedisClient,
+		provideMarketDataCache,
+		fx.Annotate(provideRedisIdempotencyRepository, fx.ResultTags(`name:"natsPublishIdempotency"`)),
 	)
 }
 
@@ -113,6 +124,11 @@ func ApplicationModule() fx.Option {
 		provideChangeOperationalMode,
 		provideResetPaperState,
 		provideQueryService,
+		provideBacktestUseCase,
+		provideOptimizationUseCase,
+		provideDatasetExportUseCase,
+		provideQuantDiagnosticsUseCase,
+		fx.Annotate(provideQuantEventPublisherUseCase, fx.ParamTags(``, `name:"natsPublishIdempotency"`, ``)),
 	)
 }
 
@@ -123,6 +139,11 @@ func InterfaceModule() fx.Option {
 	return fx.Provide(
 		provideQueryHandler,
 		provideSystemHandler,
+		provideBacktestHandler,
+		provideOptimizationHandler,
+		provideDatasetHandler,
+		provideStrategyHandler,
+		provideQuantDiagnosticsHandler,
 		provideHub,
 		provideWebSocketHandler,
 		provideRouter,
@@ -131,6 +152,7 @@ func InterfaceModule() fx.Option {
 		provideEventConsumer,
 		provideOrderConsumer,
 		provideOutboxConsumer,
+		provideQuantEventsConsumer,
 	)
 }
 

@@ -68,9 +68,9 @@ docker-down: ## Stop and remove the stack
 
 generate: proto ## Alias for `make proto`
 
-proto: ## Regenerate gRPC/protobuf code for the Quant Engine contract
-	@command -v protoc >/dev/null 2>&1 || { echo "protoc is not installed; see internal/contracts/grpc/quant/generated/doc.go"; exit 1; }
+proto: ## Regenerate gRPC/protobuf code for the Quant Engine contract (vendored from ../quant-engine/proto/quant/v1)
+	@command -v protoc >/dev/null 2>&1 || { echo "protoc is not installed; see docs/decisions/0010-real-grpc-client-for-quant-engine.md"; exit 1; }
 	protoc \
 		--go_out=. --go_opt=module=trading-core \
 		--go-grpc_out=. --go-grpc_opt=module=trading-core \
-		internal/contracts/grpc/quant/quant_engine.proto
+		internal/contracts/grpc/quant/v1/quant_engine.proto

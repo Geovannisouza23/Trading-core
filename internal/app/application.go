@@ -24,6 +24,8 @@ func Module() fx.Option {
 			startOutboxWorker,
 			startReconciliationScheduler,
 			startMarketDataFeed,
+			startQuantEventsConsumer,
+			startActivityWatcher,
 		),
 	)
 }
@@ -51,6 +53,7 @@ func WorkerOnlyModule() fx.Option {
 			bootstrap,
 			startOutboxWorker,
 			startReconciliationScheduler,
+			startActivityWatcher,
 		),
 	)
 }

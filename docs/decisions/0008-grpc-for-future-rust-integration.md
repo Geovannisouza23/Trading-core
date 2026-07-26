@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted.
+Accepted. Partially superseded by ADR 0010: the proto source described
+below (the local placeholder) has been replaced by a vendored copy of
+`quant-engine`'s own canonical contract — this ADR's authorization for
+the Rust side to evolve the contract, and its "how to connect it later"
+recipe, both held up exactly as written.
 
 ## Context
 

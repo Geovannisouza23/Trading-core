@@ -31,6 +31,12 @@ type Config struct {
 
 	QueryHandler  *handler.QueryHandler
 	SystemHandler *handler.SystemHandler
+
+	BacktestHandler         *handler.BacktestHandler
+	OptimizationHandler     *handler.OptimizationHandler
+	DatasetHandler          *handler.DatasetHandler
+	StrategyHandler         *handler.StrategyHandler
+	QuantDiagnosticsHandler *handler.QuantDiagnosticsHandler
 }
 
 func New(cfg Config) http.Handler {
@@ -73,7 +79,28 @@ func New(cfg Config) http.Handler {
 			ctrl.Post("/system/close-only", cfg.SystemHandler.CloseOnly)
 			ctrl.Post("/system/kill-switch", cfg.SystemHandler.KillSwitch)
 			ctrl.Post("/paper/reset", cfg.SystemHandler.PaperReset)
-			ctrl.Post("/backtest/request", handler.BacktestRequest)
+
+			ctrl.Post("/backtest/request", cfg.BacktestHandler.Request)
+			ctrl.Get("/backtest/{id}", cfg.BacktestHandler.Result)
+			ctrl.Get("/backtest/{id}/stream", cfg.BacktestHandler.Stream)
+
+			ctrl.Post("/optimization/request", cfg.OptimizationHandler.Request)
+			ctrl.Get("/optimization/{id}", cfg.OptimizationHandler.Result)
+
+			ctrl.Post("/dataset/export", cfg.DatasetHandler.Export)
+
+			ctrl.Post("/strategy/validate", cfg.StrategyHandler.Validate)
+
+			ctrl.Post("/quant/features", cfg.QuantDiagnosticsHandler.CalculateFeatures)
+			ctrl.Post("/quant/model/evaluate", cfg.QuantDiagnosticsHandler.EvaluateModel)
+			ctrl.Post("/quant/model/reload", cfg.QuantDiagnosticsHandler.ReloadModel)
+			ctrl.Get("/quant/feature-schema", cfg.QuantDiagnosticsHandler.FeatureSchema)
+			ctrl.Get("/quant/model-metadata", cfg.QuantDiagnosticsHandler.ModelMetadata)
+			ctrl.Post("/decisions/{decision_id}/outcome", cfg.QuantDiagnosticsHandler.RegisterDecisionOutcome)
+
+			// Async (NATS fan-out) counterparts to the two sync RPCs above.
+			ctrl.Post("/decisions/{decision_id}/outcome/publish", cfg.QuantDiagnosticsHandler.PublishDecisionOutcome)
+			ctrl.Post("/quant/model/approved/publish", cfg.QuantDiagnosticsHandler.PublishModelApproved)
 		})
 	})
 

@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.uber.org/fx"
@@ -23,9 +25,12 @@ import (
 	marketconsumer "trading-core/internal/interfaces/consumer/market"
 	orderconsumer "trading-core/internal/interfaces/consumer/order"
 	outboxconsumer "trading-core/internal/interfaces/consumer/outbox"
+	quantevents "trading-core/internal/interfaces/consumer/quantevents"
 
 	outboxdb "trading-core/internal/infrastructure/database/outbox"
 	marketdatawebsocket "trading-core/internal/infrastructure/external/marketdata/websocket"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // bootstrap ensures the single PAPER account and the operational_modes
@@ -105,6 +110,64 @@ func subscribeConsumers(lc fx.Lifecycle, bus output.EventBus, orderConsumer *ord
 	})
 }
 
+const quantEventsDurableName = "trading-core-quant-job-events"
+
+// startQuantEventsConsumer subscribes to quant-engine's job-completion
+// events (see quantevents.Consumer) whenever NATS is connected — js is
+// nil precisely when NATS was unreachable at startup and NATS_REQUIRED
+// is false (see provideNatsConnection), mirroring quant-engine's own
+// maybe_spawn_consumers: a no-op rather than a startup failure, since
+// this consumer is a real-time notification convenience, not a
+// dependency of the synchronous request/response paths.
+func startQuantEventsConsumer(lc fx.Lifecycle, js jetstream.JetStream, cfg *config.Config, consumer *quantevents.Consumer, logger *slog.Logger) {
+	if js == nil {
+		return
+	}
+	var consumeCtx jetstream.ConsumeContext
+	lc.Append(fx.Hook{
+		OnStart: func(ctx context.Context) error {
+			streamName := strings.ToUpper(cfg.Nats.StreamPrefix) + "_EVENTS"
+			stream, err := js.Stream(ctx, streamName)
+			if err != nil {
+				logger.Warn("quant events consumer: stream unavailable, skipping subscription", "stream", streamName, "error", err)
+				return nil
+			}
+			jsConsumer, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+				Durable: quantEventsDurableName,
+				FilterSubjects: []string{
+					cfg.Nats.StreamPrefix + ".backtest.*.events",
+					cfg.Nats.StreamPrefix + ".optimization.*.events",
+				},
+				AckPolicy: jetstream.AckExplicitPolicy,
+				// New-only: a freshly created durable should not replay
+				// up to 30 days of backlog (the stream's MaxAge) into the
+				// dashboard on first connect.
+				DeliverPolicy: jetstream.DeliverNewPolicy,
+			})
+			if err != nil {
+				logger.Warn("quant events consumer: failed to create consumer, skipping subscription", "error", err)
+				return nil
+			}
+			consumeCtx, err = jsConsumer.Consume(func(msg jetstream.Msg) {
+				consumer.Handle(msg.Data())
+				if err := msg.Ack(); err != nil {
+					logger.Warn("quant events consumer: ack failed", "error", err)
+				}
+			})
+			if err != nil {
+				logger.Warn("quant events consumer: failed to start consuming, skipping subscription", "error", err)
+			}
+			return nil
+		},
+		OnStop: func(context.Context) error {
+			if consumeCtx != nil {
+				consumeCtx.Stop()
+			}
+			return nil
+		},
+	})
+}
+
 // startOutboxWorker drains the transactional outbox on a fixed interval.
 func startOutboxWorker(lc fx.Lifecycle, worker *outboxdb.Worker) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -155,17 +218,100 @@ func startReconciliationScheduler(lc fx.Lifecycle, reconcile input.ReconcileBrok
 	})
 }
 
+// startActivityWatcher polls whether the system currently has zero open
+// positions and zero in-flight orders, and publishes
+// output.ActivityPublisher.PublishActivityChanged only on the
+// idle<->active edge (via activityTransitionTracker) — never on every
+// tick — so the Python training-pipeline's idle_watcher reacts to state
+// changes, not a heartbeat. Runs in both Module() and
+// WorkerOnlyModule(), unlike startMarketDataFeed: that one creates
+// orders, where two independent copies would double-execute against
+// the same market move; this one only reads and publishes an
+// idempotent status signal, and the downstream consumer already
+// guards against acting on a duplicate (checks "is a training run
+// already in progress" before starting one) — so a duplicate publish
+// from running in both processes is harmless, not dangerous.
+func startActivityWatcher(lc fx.Lifecycle, positions output.PositionRepository, orders output.OrderRepository, publisher output.ActivityPublisher, clock output.Clock, logger *slog.Logger) {
+	ctx, cancel := context.WithCancel(context.Background())
+	lc.Append(fx.Hook{
+		OnStart: func(startCtx context.Context) error {
+			go func() {
+				ticker := time.NewTicker(30 * time.Second)
+				defer ticker.Stop()
+				var tracker activityTransitionTracker
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						idle, err := isSystemIdle(ctx, positions, orders)
+						if err != nil {
+							logger.Error("activity watcher: failed to check activity", "error", err)
+							continue
+						}
+						if !tracker.observe(idle) {
+							continue
+						}
+						if err := publisher.PublishActivityChanged(ctx, idle, clock.Now()); err != nil {
+							logger.Warn("activity watcher: failed to publish activity change", "idle", idle, "error", err)
+							continue
+						}
+						logger.Info("activity watcher: published activity transition", "idle", idle)
+					}
+				}
+			}()
+			return nil
+		},
+		OnStop: func(stopCtx context.Context) error {
+			cancel()
+			return nil
+		},
+	})
+}
+
+// isSystemIdle reports whether there are currently zero open positions
+// and zero in-flight orders.
+func isSystemIdle(ctx context.Context, positions output.PositionRepository, orders output.OrderRepository) (bool, error) {
+	openPositions, err := positions.ListOpen(ctx)
+	if err != nil {
+		return false, fmt.Errorf("listing open positions: %w", err)
+	}
+	openOrders, err := orders.ListOpen(ctx)
+	if err != nil {
+		return false, fmt.Errorf("listing open orders: %w", err)
+	}
+	return len(openPositions) == 0 && len(openOrders) == 0, nil
+}
+
+// activityTransitionTracker decides, given a freshly-observed idle
+// state, whether it differs from the last one seen — split out from
+// startActivityWatcher's ticker loop so the decision logic is
+// unit-testable without a real clock/goroutine/repository. The first
+// observation always counts as a transition: a freshly-started process
+// has no prior state to compare against, and the Python watcher should
+// learn the current state immediately on trading-core startup rather
+// than wait for an actual change that might not come for a while.
+type activityTransitionTracker struct {
+	lastIdle *bool
+}
+
+func (t *activityTransitionTracker) observe(idle bool) bool {
+	changed := t.lastIdle == nil || *t.lastIdle != idle
+	t.lastIdle = &idle
+	return changed
+}
+
 // startMarketDataFeed connects to Binance's public futures kline stream
 // (no API key required) and drives every closed candle through the
 // market consumer's signal -> risk -> execution pipeline. Connection
 // failures (e.g. no outbound network access in a sandboxed environment)
 // are logged and retried with backoff; they never crash the process or
 // block any other part of the system.
-func startMarketDataFeed(lc fx.Lifecycle, consumer *marketconsumer.Consumer, logger *slog.Logger) {
+func startMarketDataFeed(lc fx.Lifecycle, consumer *marketconsumer.Consumer, cache output.MarketDataCache, logger *slog.Logger) {
 	ctx, cancel := context.WithCancel(context.Background())
 	lc.Append(fx.Hook{
 		OnStart: func(startCtx context.Context) error {
-			go runMarketDataFeed(ctx, consumer, logger)
+			go runMarketDataFeed(ctx, consumer, cache, logger)
 			return nil
 		},
 		OnStop: func(stopCtx context.Context) error {
@@ -182,12 +328,26 @@ const (
 	maxRecentCandles     = 50
 )
 
-func runMarketDataFeed(ctx context.Context, consumer *marketconsumer.Consumer, logger *slog.Logger) {
+// runMarketDataFeed keeps recentCandles as the in-process rolling window
+// it always has, plus a best-effort Redis write-through after every close
+// and a read-through warm start: a fresh process (or one recovering from
+// a crash) picks up the last known window from cache instead of running
+// with an empty one until maxRecentCandles closes accumulate. Redis is
+// optional infrastructure here exactly like everywhere else it's used —
+// a cache miss or a down Redis degrades to the pre-existing empty-start
+// behavior, it never blocks the feed.
+func runMarketDataFeed(ctx context.Context, consumer *marketconsumer.Consumer, cache output.MarketDataCache, logger *slog.Logger) {
 	symbol := shared.MustNewSymbol(defaultFeedSymbol)
 	timeframe := shared.MustNewTimeframe(defaultFeedTimeframe)
 	client := marketdatawebsocket.NewClient(defaultFeedBaseURL)
 
 	var recentCandles []market.Candle
+	if cached, ok, err := cache.GetCandles(ctx, symbol, timeframe); err != nil {
+		logger.Warn("market data feed: cache warm-start failed", "symbol", defaultFeedSymbol, "error", err)
+	} else if ok {
+		recentCandles = cached
+		logger.Info("market data feed: warm-started from cache", "symbol", defaultFeedSymbol, "candles", len(recentCandles))
+	}
 	backoff := time.Second
 
 	for {
@@ -203,6 +363,9 @@ func runMarketDataFeed(ctx context.Context, consumer *marketconsumer.Consumer, l
 			recentCandles = append(recentCandles, candle)
 			if len(recentCandles) > maxRecentCandles {
 				recentCandles = recentCandles[len(recentCandles)-maxRecentCandles:]
+			}
+			if err := cache.SetCandles(ctx, symbol, timeframe, recentCandles); err != nil {
+				logger.Warn("market data feed: cache write-through failed", "symbol", defaultFeedSymbol, "error", err)
 			}
 			backoff = time.Second
 		})
